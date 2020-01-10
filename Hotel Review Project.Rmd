@@ -1,0 +1,451 @@
+---
+title: "Hotel Review Project"
+author: "Alexander Cruz"
+date: "1/9/2020"
+output: pdf_document
+---
+
+## Overview
+This final project is related to HarvardX Data Science: Capstone course. I decided to build a machine learning algorithm due to my love to travel.
+github repo: https://github.com/tclex7/havard_edx_final_project 
+
+## Introduction
+As I mentioned above I am really interested in the hotel industry, and I wanted to see if using the skills I learned in the previous machine learning course I could build an effective recommendation system.  I used the Hotel Reviews dataset from Kaggle.com, and was supprised to see that the average rating of over 4, using 1 to 5 scale.  
+
+## Dataset
+As mentioned above, for this project I used the Hotel Reviews datasets from kaggle.com, that was provided by Datafiniti's Business Database. I used two datasets that ranged from dates January 2018 to September 2018 and December 2018 to May 2019.  These two datasets were combined and uploaded to github(https://github.com/tclex7/havard_edx_final_project) as an .rds file, github has a policy that does not allow files over 25mb, so .csv was not possible.  The dataset included 19,758 reviews, 2,753 unique hotels, 15,558 users, and all 50 states.  
+
+## Methodology
+After Cleaning the data, the first step was to set a baseline for recommendation system.  The average rating will be used as that baseline.  We will buildrecommendation models using the variables hotel, user, and state, which are also included in the dataset.  We will look that the variables effects, and then add regularized linear regresssion to each variable.
+
+## Read and Clean data set
+Verify that all R packages needed for this project are installed, and activate libraries
+```{r, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+if(!require(readr)) install.packages("readr", repos = "http://cran.us.r-project.org")
+library(readr)
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+library(tidyverse)
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+library(caret)
+if(!require(knitr)) install.packages("knitr", repos = "http://cran.us.r-project.org")
+library(knitr)
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+library(ggplot2)
+if (!require(scales)) install.packages('scales')
+library(scales)
+```
+## Read and Clean Data
+Read in hotel rds file, it has been saved in github ripository: https://github.com/tclex7/havard_edx_final_project/blob/master/hotel.rds
+```{r, echo = TRUE, message = FALSE, warning = FALSE, eval = TRUE}
+hotel_reviews <- read_rds("hotel.rds")
+```
+Remove duplicate rows in the dataframe
+```{r}
+hotel_reviews <- distinct(hotel_reviews)
+```
+
+Summary of Data
+```{r}
+glimpse(hotel_reviews)
+summary(hotel_reviews)
+head(hotel_reviews)
+```
+
+Select only the variables that we will be using for machine learning algorithm 
+```{r}
+hotel_reviews <- hotel_reviews %>% select(name, reviews.rating,reviews.username,province)
+```
+
+Rename variables 
+```{r}
+colnames(hotel_reviews) <- c("hotel","rating","user","state")
+```
+
+check to see if any of the variables have N/As
+```{r}
+sapply(hotel_reviews,function(x)sum(is.na(x)))
+```
+
+Since there is only one N/A for user, we will call that user "Mr. Unknown"
+```{r}
+hotel_reviews[is.na(hotel_reviews)] <- "Mr. Unknown"
+```
+
+now we can verify no N/As exist in the dataset
+```{r}
+sapply(hotel_reviews,function(x)sum(is.na(x)))
+```
+
+Summary of distinct reviews, hotels, users, and states
+```{r}
+hotel_reviews %>% summarize(total_reviews = n(),
+                            total_hotels = n_distinct(hotel),
+                            total_users = n_distinct(user),
+                            total_states = n_distinct(state))
+```
+
+check how many different ratings were given
+```{r}
+n_distinct(hotel_reviews$rating)
+```
+
+We see 1 is the smallest rating and 5 was the highest
+```{r}
+summary(hotel_reviews$rating)
+```
+
+Table breakdown of all possible ratings
+```{r}
+data.frame(table(hotel_reviews$rating))
+```
+
+## Explore and visualize data set
+Histrogram showing distribution of rating, we can see that majority of ratings were either 5s or 4s
+```{r}
+hotel_reviews %>%
+  ggplot(aes(rating)) +
+  geom_histogram(binwidth = .25, color = "blue") +
+  scale_x_continuous(breaks=seq(1, 5, .25)) +
+  scale_y_continuous(labels=comma) +
+  labs(x="hotel Rating", y="# of Ratings") +
+  ggtitle("Hotel Ratings")
+```
+
+Number of ratings per user, we can see that the majority of users only submitted one review
+```{r}
+hotel_reviews %>% 
+  group_by(user) %>%
+  summarize(total_user = as.numeric(n())) %>%
+  ggplot(aes(total_user)) +
+  geom_histogram(bins = 50) +
+  scale_x_log10()
+```
+
+We will find out exactly what portion of the users only completed 1 review in the dataset
+```{r}
+hotel <- hotel_reviews %>% 
+  group_by(user) %>%
+  summarize(total_user = as.numeric(n())) %>% 
+  arrange(desc(total_user)) %>%
+  mutate(one_or_more = ifelse(total_user==1,"just_one","more_than_one"))
+table(hotel$one_or_more)
+```
+
+Looks like about 92% of users only completed 1 review
+```{r}
+round(prop.table(table(hotel$one_or_more))*100,0)
+```
+
+Visualize top 20 total ratings by state, we can see California and Florida get the most reviews
+```{r}
+hotel_reviews %>% 
+  group_by(state) %>%
+  summarize(total_state = as.numeric(n())) %>%
+  arrange(desc(total_state)) %>%
+  slice(1:20) %>%
+  ggplot(aes(x = reorder(state, -total_state),total_state), colour ="blue") +
+  geom_col() +
+  scale_y_continuous(labels=comma) +
+  labs(x="State", y="# of Ratings") +
+  ggtitle("Total Ratings by State")
+```
+
+## Breakout Data so we have a training and a test set.  
+set seed, if you have R version 3.5 or below use set.seed(1), below you can see what your current version is
+```{r}
+set.seed(1, sample.kind="Rounding")
+version$version.string
+```
+
+
+Break out data to train and test sets
+```{r}
+test_index <- createDataPartition(y = hotel_reviews$rating, times = 1, p = 0.4, list = FALSE)
+hotel_train <- hotel_reviews[-test_index,]
+temp <- hotel_reviews[test_index,]
+```
+
+Make sure user and hotel in hotel_test set are also in hotel_train set
+```{r}
+hotel_test <- temp %>% 
+  semi_join(hotel_train, by = "hotel") %>%
+  semi_join(hotel_train, by = "user")
+```
+
+Add rows removed from hotel_test set back into hotel_train set
+```{r}
+removed <- anti_join(temp, hotel_test)
+hotel_train <- rbind(hotel_train, removed)
+```
+
+Remove variables no longer needed
+```{r}
+rm(test_index, temp, removed)
+```
+
+Rename variables to make it easier to run functions
+```{r}
+train_set <- hotel_train
+test_set <- hotel_test
+rm(hotel_train, hotel_test)
+```
+
+
+## Build recommendation system
+
+Define RMSE function, this will measure how far our predictions are from true rating
+```{r}
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+```
+
+For this model we will use a simple average of the training set for prediction
+```{r}
+mu <- mean(train_set$rating)
+mu
+```
+
+Compute RMSE on the test set
+```{r}
+average_rmse <- RMSE(test_set$rating, mu)
+average_rmse
+```
+
+Show RMSE in a clean way using knitr
+```{r}
+rmse_results <- data_frame(method = "Average Hotel Rating Model", RMSE = average_rmse)
+rmse_results %>% knitr::kable()
+```
+
+Now we will add the hotel effect to the model
+```{r}
+hotel_avgs <- train_set %>% 
+  group_by(hotel) %>% 
+  summarize(b_i = mean(rating - mu))
+```
+
+visualize how close ratings are to the mean
+```{r}
+hotel_avgs %>% qplot(b_i, geom ="histogram", bins = 10, data = ., color = I("blue"))
+```
+
+We will calculate predicted ratings
+```{r}
+predicted_ratings <- mu + test_set %>% 
+  left_join(hotel_avgs, by='hotel') %>%
+  .$b_i
+
+model_1_rmse <- RMSE(predicted_ratings, test_set$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="hotel Effect Model",
+                                     RMSE = model_1_rmse ))
+
+rmse_results %>% knitr::kable()
+```
+
+
+Now we will add users to the previous model
+```{r}
+train_set %>% 
+  group_by(user) %>% 
+  summarize(b_u = mean(rating)) %>% 
+  ggplot(aes(b_u)) + 
+  geom_histogram(bins = 10, color = "red")
+
+
+user_avgs <- train_set %>% 
+  left_join(hotel_avgs, by='hotel') %>%
+  group_by(user) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+predicted_ratings <- test_set %>% 
+  left_join(hotel_avgs, by='hotel') %>%
+  left_join(user_avgs, by='user') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  .$pred
+
+model_2_rmse <- RMSE(predicted_ratings, test_set$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Hotel + User Effects Model",  
+                                     RMSE = model_2_rmse ))
+rmse_results %>% knitr::kable()
+```
+
+We will add state to the previous model, and follow similar process as previous lines of code
+```{r}
+train_set %>% 
+  group_by(state) %>% 
+  summarize(b_s = mean(rating)) %>% 
+  ggplot(aes(b_s)) + 
+  geom_histogram(bins = 10, color = "green")
+
+state_avgs <- train_set %>% 
+  left_join(hotel_avgs, by='hotel') %>%
+  left_join(user_avgs, by='user') %>%
+  group_by(state) %>%
+  summarize(b_s = mean(rating - mu - b_i - b_u))
+
+predicted_ratings <- test_set %>% 
+  left_join(hotel_avgs, by='hotel') %>%
+  left_join(user_avgs, by='user') %>%
+  left_join(state_avgs, by='state') %>%
+  mutate(pred = mu + b_i + b_u + b_s) %>%
+  .$pred
+
+model_3_rmse <- RMSE(predicted_ratings, test_set$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Hotel + User + State Effects Model",  
+                                     RMSE = model_3_rmse ))
+rmse_results %>% knitr::kable()
+```
+
+## Regularization
+Now we will try using regularization on Hotel to improve RMSE score
+```{r}
+lambdas <- seq(0, 10, 0.1)
+mu <- mean(train_set$rating)
+just_the_sum <- train_set %>% 
+  group_by(hotel) %>% 
+  summarize(s = sum(rating - mu), n_i = n())
+rmses <- sapply(lambdas, function(l){
+  predicted_ratings <- test_set %>% 
+    left_join(just_the_sum, by='hotel') %>% 
+    mutate(b_i = s/(n_i+l)) %>%
+    mutate(pred = mu + b_i) %>%
+    .$pred
+  return(RMSE(predicted_ratings, test_set$rating))
+})
+qplot(lambdas, rmses)  
+lambda <- lambdas[which.min(rmses)]
+lambda
+mu <- mean(train_set$rating)
+hotel_reg_avgs <- train_set %>% 
+  group_by(hotel) %>% 
+  summarize(b_i = sum(rating - mu)/(n()+lambda), n_i = n()) 
+
+data_frame(original = hotel_avgs$b_i, 
+           regularlized = hotel_reg_avgs$b_i, 
+           n = hotel_reg_avgs$n_i) %>%
+  ggplot(aes(original, regularlized, size=sqrt(n))) + 
+  geom_point(shape=1, alpha=0.5)
+
+
+predicted_ratings <- test_set %>% 
+  left_join(hotel_reg_avgs, by='hotel') %>%
+  mutate(pred = mu + b_i) %>%
+  .$pred
+
+model_3_rmse <- RMSE(predicted_ratings, test_set$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Regularized hotel Model",  
+                                     RMSE = model_3_rmse ))
+rmse_results %>% knitr::kable()
+```
+
+
+Now we will try using regularization on user to improve RMSE score, like with the user effect, it ends up making RMSE score worse
+```{r}
+lambdas <- seq(0, 10, 0.1)
+rmses <- sapply(lambdas, function(l){
+  mu <- mean(train_set$rating)
+  b_i <- train_set %>%
+    group_by(hotel) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  b_u <- train_set %>% 
+    left_join(b_i, by="hotel") %>%
+    group_by(user) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  predicted_ratings <- 
+    test_set %>% 
+    left_join(b_i, by = "hotel") %>%
+    left_join(b_u, by = "user") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    .$pred
+  return(RMSE(predicted_ratings, test_set$rating))
+})
+
+qplot(lambdas, rmses)  
+
+lambda <- lambdas[which.min(rmses)]
+lambda
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Regularized hotel + User Effect Model",  
+                                     RMSE = min(rmses)))
+rmse_results %>% knitr::kable()
+```
+
+Now we will try using regularization on state to improve RMSE score
+```{r}
+lambdas <- seq(0, 10, 0.1)
+rmses <- sapply(lambdas, function(l){
+  mu <- mean(train_set$rating)
+  b_i <- train_set %>%
+    group_by(hotel) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  b_u <- train_set %>%
+    left_join(b_i, by="hotel") %>%
+    group_by(user) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  b_s <- train_set %>%
+    left_join(b_i, by="hotel") %>%
+    left_join(b_u, by="user") %>%
+    group_by(state) %>%
+    summarize(b_s = sum(rating - b_i - b_u - mu)/(n()+l))
+  predicted_ratings <-
+    test_set %>%
+    left_join(b_i, by = "hotel") %>%
+    left_join(b_u, by = "user") %>%
+    left_join(b_s, by = "state") %>%
+    mutate(pred = mu + b_i + b_u + b_s) %>%
+    pull(pred)
+  return(RMSE(predicted_ratings, test_set$rating))
+})
+
+qplot(lambdas, rmses)  
+
+lambda <- lambdas[which.min(rmses)]
+lambda
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Regularized hotel + User Effect Model+ State",  
+                                     RMSE = min(rmses)))
+rmse_results %>% knitr::kable()
+```
+
+Hotel and State regularization effect without user, since user was negatively affected our score
+```{r}
+lambdas <- seq(0, 10, 0.1)
+rmses <- sapply(lambdas, function(l){
+  mu <- mean(train_set$rating)
+  b_i <- train_set %>%
+    group_by(hotel) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  b_s <- train_set %>% 
+    left_join(b_i, by="hotel") %>%
+    group_by(state) %>%
+    summarize(b_s = sum(rating - b_i - mu)/(n()+l))
+  predicted_ratings <- 
+    test_set %>% 
+    left_join(b_i, by = "hotel") %>%
+    left_join(b_s, by = "state") %>%
+    mutate(pred = mu + b_i + b_s) %>%
+    .$pred
+  return(RMSE(predicted_ratings, test_set$rating))
+})
+
+qplot(lambdas, rmses)  
+
+lambda <- lambdas[which.min(rmses)]
+lambda
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method="Regularized hotel + State Effect Model",  
+                                     RMSE = min(rmses)))
+rmse_results %>% knitr::kable()
+```
+
+## Conclusion
+After trying 7 different models, the regularized regression model that took hotel and state into account outperformed all other models with an RMSE of 1.075.  I found this dataset a bit frustrating that I could not bring the RMSE below 1.0.  It was interesting to see that unlike in movie ratings, hotel ratings are generally a lot higher, where 5 and 4 were the most common, but 1 was the third most common. I found it interesting that taking user effect actaully made the RMSE worse.  I believe with a larger dataset we would have been able to bring the RMSE down below 1.0.
